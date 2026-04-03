@@ -69,7 +69,7 @@ ENV_CONFIGS = {
     "macos-lume": {
         "image": None,
         "internal_vnc_port": None,
-        "internal_api_port": 5000,
+        "internal_api_port": 8443,
         "requires_kvm": False,
         "os_type": "macos",
         "use_overlays": False,  # Native Lume VMs handle disk management
@@ -718,61 +718,92 @@ class TaskRunner:
         """
         import json
         import socket
-        
+
         print(f"[Task {task_id}] Starting Lume VM: {vm_name}")
-        
+
         # Check if VM exists and get its info
         try:
-            result = await asyncio.create_subprocess_exec(
-                "lume", "list", "--json",
+            proc = await asyncio.create_subprocess_exec(
+                "lume", "get", vm_name, "--format", "json",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await asyncio.wait_for(result.communicate(), timeout=10)
-            
-            if result.returncode != 0:
-                raise RuntimeError(f"Failed to list Lume VMs: {stderr.decode()}")
-            
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
+
+            if proc.returncode != 0:
+                raise RuntimeError(
+                    f"Lume VM not found: {vm_name}. "
+                    f"Use 'lume ls' to see available VMs. Error: {stderr.decode()}"
+                )
+
             vms = json.loads(stdout.decode())
-            vm_info = next((vm for vm in vms if vm["name"] == vm_name), None)
-            
-            if not vm_info:
-                raise RuntimeError(f"Lume VM not found: {vm_name}")
-            
-            if vm_info.get("state") == "running":
+            vm_info = vms[0] if isinstance(vms, list) and vms else vms
+
+            if vm_info.get("status") == "running":
                 print(f"[Task {task_id}] Lume VM already running: {vm_name}")
             else:
-                print(f"[Task {task_id}] Starting Lume VM: {vm_name}")
-                result = await asyncio.create_subprocess_exec(
-                    "lume", "start", vm_name,
+                print(f"[Task {task_id}] Booting Lume VM: {vm_name}")
+                proc = await asyncio.create_subprocess_exec(
+                    "lume", "run", vm_name, "--no-display",
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
                 try:
-                    stdout, stderr = await asyncio.wait_for(result.communicate(), timeout=300)
-                    if result.returncode != 0:
+                    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
+                    if proc.returncode != 0:
                         raise RuntimeError(f"Failed to start Lume VM: {stderr.decode()}")
                 except asyncio.TimeoutError:
                     raise RuntimeError(f"Lume VM startup timed out: {vm_name}")
-        
+
         except RuntimeError:
             raise
         except Exception as e:
             raise RuntimeError(f"Failed to manage Lume VM: {e}")
-        
-        # Wait for API port to be available
-        api_hostname = f"{vm_name}.local"  # Lume VMs are available on local network
-        api_port_internal = 5000  # Standard API port for all VMs
-        
+
+        # Get VM IP address (Lume VMs use NAT, accessible via IP)
+        api_port_internal = api_port or 8443  # Standard CUA computer-server API port on macOS
+
+        # Re-fetch VM info to get IP after startup
+        proc = await asyncio.create_subprocess_exec(
+            "lume", "get", vm_name, "--format", "json",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+        vms = json.loads(stdout.decode())
+        vm_info = vms[0] if isinstance(vms, list) and vms else vms
+        vm_ip = vm_info.get("ipAddress")
+
+        if not vm_ip:
+            # Wait for IP to be assigned
+            print(f"[Task {task_id}] Waiting for VM IP address...")
+            for _ in range(60):
+                await asyncio.sleep(2)
+                proc = await asyncio.create_subprocess_exec(
+                    "lume", "get", vm_name, "--format", "json",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+                vms = json.loads(stdout.decode())
+                vm_info = vms[0] if isinstance(vms, list) and vms else vms
+                vm_ip = vm_info.get("ipAddress")
+                if vm_ip:
+                    break
+            if not vm_ip:
+                raise RuntimeError(f"Lume VM did not get an IP within 120s: {vm_name}")
+
+        api_hostname = vm_ip
+
         print(f"[Task {task_id}] Waiting for API at {api_hostname}:{api_port_internal}")
         max_retries = 60
         for retry in range(max_retries):
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                socket.setdefaulttimeout(1)
+                sock.settimeout(2)
                 result = sock.connect_ex((api_hostname, api_port_internal))
                 sock.close()
-                
+
                 if result == 0:
                     print(f"[Task {task_id}] Lume VM API is ready at {api_hostname}:{api_port_internal}")
                     return {
@@ -782,13 +813,13 @@ class TaskRunner:
                     }
             except Exception:
                 pass
-            
+
             if retry < max_retries - 1:
-                await asyncio.sleep(1)
-        
+                await asyncio.sleep(2)
+
         raise RuntimeError(
             f"Lume VM API did not become available within "
-            f"{max_retries} seconds at {api_hostname}:{api_port_internal}"
+            f"{max_retries * 2}s at {api_hostname}:{api_port_internal}"
         )
 
     async def _build_agent_image(
@@ -1066,10 +1097,17 @@ class TaskRunner:
             print(f"[--verbose] volumes: {volumes}")
 
         # Start container (not detached - we want to wait for it)
+        # For Lume VMs, use host network so agent can reach VM IP directly
+        lume_vm_info = None
+        if hasattr(self, '_running_tasks') and task_id in self._running_tasks:
+            lume_vm_info = self._running_tasks[task_id].get("lume_vm_info")
+
+        container_network = "host" if lume_vm_info else network_name
+
         return await start_container(
             image=image,
             name=container_name,
-            network=network_name,
+            network=container_network,
             hostname=self.agent_hostname,
             env_vars=env_vars,
             volumes=volumes,
@@ -1108,20 +1146,11 @@ class TaskRunner:
             except Exception:
                 pass  # Container may already be removed
 
-        # For Lume VMs, gracefully stop the VM (don't destroy it)
+        # For Lume VMs, do NOT stop the VM during cleanup.
+        # The VM is a shared resource that may be used by multiple tasks.
+        # Users manage VM lifecycle manually via 'lume run' / 'lume stop'.
         if lume_vm_info:
-            try:
-                print(f"[Cleanup] Stopping Lume VM: {lume_vm_info['vm_name']}")
-                result = await asyncio.create_subprocess_exec(
-                    "lume", "stop", lume_vm_info["vm_name"],
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                await asyncio.wait_for(result.communicate(), timeout=30)
-            except asyncio.TimeoutError:
-                print(f"[Cleanup] Lume VM stop timed out: {lume_vm_info['vm_name']}")
-            except Exception as e:
-                print(f"[Cleanup] Failed to stop Lume VM: {e}")
+            print(f"[Cleanup] Lume VM '{lume_vm_info['vm_name']}' left running (managed externally)")
 
         # Remove network (skip for Lume VMs - they don't use Docker network)
         if not lume_vm_info:

@@ -3,18 +3,27 @@
 # run_bench.sh - CUA-Bench one-click benchmark runner
 #
 # Usage:
-#   ./run_bench.sh                              # Use defaults
+#   ./run_bench.sh                              # Use defaults (linux-docker)
 #   ./run_bench.sh --api-base <URL>             # Custom API endpoint
 #   ./run_bench.sh --model <MODEL>              # Custom model name
 #   ./run_bench.sh --dataset <DATASET_DIR>      # Custom dataset
 #   ./run_bench.sh --parallel <N>               # Parallelism
 #   ./run_bench.sh --skip-build                 # Skip Docker image rebuild
+#   ./run_bench.sh --provider-type macos-lume --lume-vm <VM_NAME>  # Use macOS Lume VM
 #
-# Example:
+# Examples:
+#   # Linux Docker (default)
 #   ./run_bench.sh \
 #     --api-base https://my-api.example.com/v1 \
 #     --model openai/my-model \
 #     --parallel 4
+#
+#   # macOS Lume VM
+#   ./run_bench.sh \
+#     --provider-type macos-lume \
+#     --lume-vm macos-tahoe-cua_fixed \
+#     --api-base https://my-api.example.com/v1 \
+#     --parallel 1
 #
 set -euo pipefail
 
@@ -29,6 +38,7 @@ PROVIDER_TYPE="${CUA_PROVIDER_TYPE:-native}"
 MAX_PARALLEL="${CUA_MAX_PARALLEL:-4}"
 OPENAI_API_KEY="${OPENAI_API_KEY:-dummy}"
 SKIP_BUILD="${CUA_SKIP_BUILD:-false}"
+LUME_VM="${CUA_LUME_VM:-}"  # Lume VM name (for --platform macos-lume)
 
 # Colima resource settings
 COLIMA_CPUS="${COLIMA_CPUS:-8}"
@@ -47,6 +57,7 @@ while [[ $# -gt 0 ]]; do
         --parallel)     MAX_PARALLEL="$2";  shift 2 ;;
         --api-key)      OPENAI_API_KEY="$2"; shift 2 ;;
         --skip-build)   SKIP_BUILD=true;    shift ;;
+        --lume-vm)      LUME_VM="$2";       shift 2 ;;
         --cpus)         COLIMA_CPUS="$2";   shift 2 ;;
         --memory)       COLIMA_MEMORY="$2"; shift 2 ;;
         -h|--help)
@@ -85,10 +96,35 @@ done
 ok "All prerequisites found"
 
 # ============================================================
-# Step 2: Ensure Colima is running with enough resources
+# Step 2: Ensure Docker runtime is ready
 # ============================================================
-step 2 "Ensuring Colima has enough resources (${COLIMA_CPUS} CPU / ${COLIMA_MEMORY}GB RAM)"
+step 2 "Ensuring Docker runtime is ready"
 
+if [[ "$PROVIDER_TYPE" == "macos-lume" ]]; then
+    # For macos-lume, we still need Docker for the agent container
+    # but Colima resource requirements are lower (no cua-env containers)
+    info "Using macOS Lume VM - agent runs in Docker, environment runs natively"
+
+    # Verify lume is installed
+    if ! command -v lume &>/dev/null; then
+        err "lume is not installed. Install via: brew install trycua/tap/lume"
+        exit 1
+    fi
+
+    # Verify the VM exists
+    if [[ -n "$LUME_VM" ]]; then
+        if ! lume get "$LUME_VM" --format json &>/dev/null; then
+            err "Lume VM '$LUME_VM' not found. Available VMs:"
+            lume ls
+            exit 1
+        fi
+        ok "Lume VM found: $LUME_VM"
+    else
+        info "No --lume-vm specified, will use VM name from task config or 'macos-lume'"
+    fi
+fi
+
+# Ensure Colima has enough resources
 COLIMA_RUNNING=false
 if colima status &>/dev/null; then
     COLIMA_RUNNING=true
@@ -164,15 +200,29 @@ echo "  Model:        $MODEL"
 echo "  API Base:     $API_BASE"
 echo "  Provider:     $PROVIDER_TYPE"
 echo "  Parallelism:  $MAX_PARALLEL"
+if [[ -n "$LUME_VM" ]]; then
+echo "  Lume VM:      $LUME_VM"
+fi
 echo ""
 
 export OPENAI_API_KEY
+
+# Build extra arguments
+EXTRA_ARGS=()
+if [[ "$PROVIDER_TYPE" == "macos-lume" ]]; then
+    EXTRA_ARGS+=(--platform macos-lume)
+    if [[ -n "$LUME_VM" ]]; then
+        EXTRA_ARGS+=(--image "$LUME_VM")
+    fi
+fi
+
 RUN_OUTPUT=$(cb run dataset "$DATASET" \
     --agent "$AGENT" \
     --model "$MODEL" \
     --api-base "$API_BASE" \
     --provider-type "$PROVIDER_TYPE" \
     --max-parallel "$MAX_PARALLEL" \
+    "${EXTRA_ARGS[@]}" \
     2>&1)
 
 echo "$RUN_OUTPUT"

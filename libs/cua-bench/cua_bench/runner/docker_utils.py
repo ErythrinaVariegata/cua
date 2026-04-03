@@ -221,7 +221,8 @@ async def start_container(
 
     # Network and hostname
     cmd.extend(["--network", network])
-    cmd.extend(["--hostname", hostname])
+    if network != "host":
+        cmd.extend(["--hostname", hostname])
     cmd.extend(["--name", name])
 
     # Optional flags

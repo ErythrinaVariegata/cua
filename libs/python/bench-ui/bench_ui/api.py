@@ -42,19 +42,57 @@ def _detect_port_for_pid(pid: int) -> int:
     if psutil is None:
         raise RuntimeError("psutil is required for PID->port detection. Please install psutil.")
 
-    # Scan system-wide connections and filter by PID
-    for c in psutil.net_connections(kind="tcp"):
-        if getattr(c, "pid", None) != pid:
-            continue
-        laddr = getattr(c, "laddr", None)
-        status = str(getattr(c, "status", ""))
-        if not laddr or not isinstance(laddr, tuple) or len(laddr) < 2:
-            continue
-        lip, lport = laddr[0], int(laddr[1])
-        if status.upper() != "LISTEN":
-            continue
-        if lip in ("127.0.0.1", "::1", "0.0.0.0", "::"):
-            return lport
+    # Try per-process connections first (works without root on macOS)
+    try:
+        proc = psutil.Process(pid)
+        for c in proc.net_connections(kind="tcp"):
+            laddr = getattr(c, "laddr", None)
+            status = str(getattr(c, "status", ""))
+            if not laddr or not isinstance(laddr, tuple) or len(laddr) < 2:
+                continue
+            lip, lport = laddr[0], int(laddr[1])
+            if status.upper() != "LISTEN":
+                continue
+            if lip in ("127.0.0.1", "::1", "0.0.0.0", "::"):
+                return lport
+    except (psutil.AccessDenied, psutil.NoSuchProcess):
+        pass
+
+    # Fallback: use lsof (works on macOS without root for own-user processes)
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["lsof", "-iTCP", "-sTCP:LISTEN", "-nP", f"-p{pid}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        for line in result.stdout.strip().split("\n")[1:]:  # skip header
+            parts = line.split()
+            if len(parts) >= 9:
+                # NAME column like "127.0.0.1:54321" or "*:54321"
+                name = parts[8]
+                if ":" in name:
+                    port_str = name.rsplit(":", 1)[-1]
+                    if port_str.isdigit():
+                        return int(port_str)
+    except Exception:
+        pass
+
+    # Last resort: scan system-wide connections (may fail on macOS without root)
+    try:
+        for c in psutil.net_connections(kind="tcp"):
+            if getattr(c, "pid", None) != pid:
+                continue
+            laddr = getattr(c, "laddr", None)
+            status = str(getattr(c, "status", ""))
+            if not laddr or not isinstance(laddr, tuple) or len(laddr) < 2:
+                continue
+            lip, lport = laddr[0], int(laddr[1])
+            if status.upper() != "LISTEN":
+                continue
+            if lip in ("127.0.0.1", "::1", "0.0.0.0", "::"):
+                return lport
+    except psutil.AccessDenied:
+        pass
 
     raise RuntimeError(f"Could not detect listening port for pid {pid}")
 
