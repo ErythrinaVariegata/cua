@@ -1084,6 +1084,7 @@ async def _cmd_run_task_async(args) -> int:
             agent_import_path=agent_import_path,
             model=getattr(args, "model", None),
             max_steps=getattr(args, "max_steps", 100),
+            api_base=getattr(args, "api_base", None),
             oracle=getattr(args, "oracle", False),
             memory=getattr(args, "memory", "8G"),
             cpus=getattr(args, "cpus", "8"),
@@ -1310,6 +1311,8 @@ async def _cmd_run_task_detached(args) -> int:
         cmd.extend(["--model", args.model])
     if getattr(args, "max_steps", None):
         cmd.extend(["--max-steps", str(args.max_steps)])
+    if getattr(args, "api_base", None):
+        cmd.extend(["--api-base", args.api_base])
     if getattr(args, "oracle", False):
         cmd.append("--oracle")
     if getattr(args, "image", None):
@@ -1599,6 +1602,7 @@ async def _cmd_run_dataset_async(args) -> int:
                     agent_import_path=agent_import_path,
                     model=getattr(args, "model", None),
                     max_steps=getattr(args, "max_steps", 100),
+                    api_base=getattr(args, "api_base", None),
                     oracle=oracle_mode,
                     memory=getattr(args, "memory", "8G"),
                     cpus=getattr(args, "cpus", "8"),
@@ -1863,6 +1867,8 @@ def _apply_config_defaults_for_task(args):
         args.agent_import_path = effective["agent_import_path"]
     if not getattr(args, "model", None) and effective.get("model"):
         args.model = effective["model"]
+    if not getattr(args, "api_base", None) and effective.get("api_base"):
+        args.api_base = effective["api_base"]
     if not getattr(args, "max_steps", None) and effective.get("max_steps"):
         args.max_steps = effective["max_steps"]
     if not getattr(args, "output_dir", None) and effective.get("output_dir"):
@@ -1925,6 +1931,8 @@ def _apply_config_defaults(args):
         args.agent_import_path = effective["agent_import_path"]
     if not getattr(args, "model", None) and effective.get("model"):
         args.model = effective["model"]
+    if not getattr(args, "api_base", None) and effective.get("api_base"):
+        args.api_base = effective["api_base"]
     if not getattr(args, "max_steps", None) and effective.get("max_steps"):
         args.max_steps = effective["max_steps"]
     if not getattr(args, "output_dir", None) and effective.get("output_dir"):

@@ -35,6 +35,7 @@ class CustomAgentEntry:
     builtin: bool = False  # True for built-in agents (cua-agent, gemini)
     command: Optional[list[str]] = None  # Custom command to run in container
     defaults: dict[str, Any] = field(default_factory=dict)
+    api_base: Optional[str] = None  # Custom OpenAI-compatible base URL
 
     def get_image(self) -> str:
         """Get the Docker image to use for this agent.
@@ -64,6 +65,7 @@ class AgentConfig:
     import_path: str | None = None
     model: str | None = None
     max_steps: int = 100
+    api_base: str | None = None  # Custom OpenAI-compatible base URL
     environments: dict[str, dict[str, Any]] | None = None  # Per-env overrides
 
     @classmethod
@@ -74,6 +76,7 @@ class AgentConfig:
             import_path=data.get("import_path"),
             model=data.get("model"),
             max_steps=data.get("max_steps", 100),
+            api_base=data.get("api_base"),
             environments=data.get("environments"),
         )
 
@@ -85,6 +88,7 @@ class DefaultsConfig:
     model: str | None = None
     max_steps: int = 100
     output_dir: str = "./results"
+    api_base: str | None = None  # Custom OpenAI-compatible base URL
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "DefaultsConfig":
@@ -93,6 +97,7 @@ class DefaultsConfig:
             model=data.get("model"),
             max_steps=data.get("max_steps", 100),
             output_dir=data.get("output_dir", "./results"),
+            api_base=data.get("api_base"),
         )
 
 
@@ -129,6 +134,7 @@ class AgentsConfig:
         agents:
           - name: my-agent
             image: myregistry/my-agent:latest
+            api_base: https://api.custom.com/v1
             defaults:
               model: gpt-4o
 
@@ -160,6 +166,7 @@ class AgentsConfig:
                     builtin=agent_data.get("builtin", False),
                     command=command,
                     defaults=agent_data.get("defaults", {}),
+                    api_base=agent_data.get("api_base"),
                 )
             )
         return cls(custom_agents=agents)

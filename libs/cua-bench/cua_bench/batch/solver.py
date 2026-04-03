@@ -54,6 +54,7 @@ def parse_args(argv: list[str]) -> dict:
         "agent_import_path": None,
         "model": None,
         "max_steps": None,
+        "api_base": None,
         "save_pngs": False,
         "filter_events": None,
         "task_index": None,
@@ -76,6 +77,8 @@ def parse_args(argv: list[str]) -> dict:
             args["model"] = argv[i + 1]
         elif arg == "--max-steps" and i + 1 < len(argv):
             args["max_steps"] = int(argv[i + 1])
+        elif arg == "--api-base" and i + 1 < len(argv):
+            args["api_base"] = argv[i + 1]
         elif arg == "--filter" and i + 1 < len(argv):
             args["filter_events"] = [name.strip() for name in argv[i + 1].split(",")]
         elif arg == "--task-index" and i + 1 < len(argv):
@@ -307,6 +310,8 @@ async def main():
                         agent_kwargs["model"] = args["model"]
                     if args["max_steps"] is not None:
                         agent_kwargs["max_steps"] = args["max_steps"]
+                    if args["api_base"]:
+                        agent_kwargs["api_base"] = args["api_base"]
                     agent = agent_class(**agent_kwargs)
 
                     logging_dir = output_dir / f"task_{task_index}_agent_logs"

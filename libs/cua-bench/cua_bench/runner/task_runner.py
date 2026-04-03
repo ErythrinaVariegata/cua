@@ -193,6 +193,7 @@ class TaskRunner:
         agent_import_path: Optional[str] = None,
         model: Optional[str] = None,
         max_steps: int = 100,
+        api_base: Optional[str] = None,
         oracle: bool = False,
         # Environment configuration
         memory: str = "8G",
@@ -228,6 +229,7 @@ class TaskRunner:
             agent_import_path: Custom agent import path
             model: Model to use
             max_steps: Maximum agent steps
+            api_base: Custom OpenAI-compatible base URL
             oracle: Run oracle solution instead of agent
             memory: Memory for environment (QEMU only)
             cpus: CPUs for environment (QEMU only)
@@ -325,6 +327,7 @@ class TaskRunner:
                 is_simulated=is_simulated,
                 dev_paths=dev_paths,
                 verbose=verbose,
+                api_base=api_base,
             )
 
             # 3.5. Start streaming agent logs to file if requested
@@ -789,6 +792,7 @@ class TaskRunner:
         is_simulated: bool = False,
         dev_paths: Optional[List[str]] = None,
         verbose: bool = False,
+        api_base: Optional[str] = None,
     ) -> ContainerInfo:
         """Start the agent container.
 
@@ -920,6 +924,8 @@ class TaskRunner:
                     command.extend(["--model", model])
                 if max_steps:
                     command.extend(["--max-steps", str(max_steps)])
+                if api_base:
+                    command.extend(["--api-base", api_base])
 
         # In --with mode, wrap command to install local packages first
         if dev_paths and dev_install_cmd:

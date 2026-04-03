@@ -144,6 +144,8 @@ class ConfigLoader:
                 effective["model"] = config.defaults.model
             effective["max_steps"] = config.defaults.max_steps
             effective["output_dir"] = config.defaults.output_dir
+            if config.defaults.api_base:
+                effective["api_base"] = config.defaults.api_base
 
         # 2. Apply agent config from config.yaml
         if config and config.agent:
@@ -155,6 +157,8 @@ class ConfigLoader:
                 effective["model"] = config.agent.model
             if config.agent.max_steps:
                 effective["max_steps"] = config.agent.max_steps
+            if config.agent.api_base:
+                effective["api_base"] = config.agent.api_base
 
             # 3. Apply environment-specific overrides
             if env_type and config.agent.environments:
@@ -170,6 +174,9 @@ class ConfigLoader:
             if agent_entry:
                 # Use import_path from agents.yaml
                 effective["agent_import_path"] = agent_entry.import_path
+                # Apply api_base from agents.yaml if present
+                if agent_entry.api_base:
+                    effective["api_base"] = agent_entry.api_base
                 # Apply defaults from agents.yaml
                 for key, value in agent_entry.defaults.items():
                     if key not in effective or effective[key] is None:

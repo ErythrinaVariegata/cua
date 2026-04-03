@@ -91,6 +91,11 @@ def main():
             "--model", help="Model to use with the agent (e.g., anthropic/claude-sonnet-4-20250514)"
         )
         parser.add_argument(
+            "--api-base",
+            dest="api_base",
+            help="Custom OpenAI-compatible base URL (e.g., https://api.custom.com/v1)",
+        )
+        parser.add_argument(
             "--oracle", action="store_true", help="Run the oracle solution instead of agent"
         )
         parser.add_argument(

@@ -46,6 +46,7 @@ class CuaAgent(BaseAgent):
         super().__init__(**kwargs)
         self.model = kwargs.get("model", "anthropic/claude-sonnet-4-20250514")
         self.max_steps = kwargs.get("max_steps", 100)
+        self.api_base = kwargs.get("api_base")
         # Number of times to retry the entire task when a transient API error occurs.
         # Task-level retry restarts agent.run() from scratch but does NOT reset the
         # desktop environment, so it is unsafe by default for evaluations.
@@ -221,15 +222,24 @@ class CuaAgent(BaseAgent):
         # Create custom computer dict from session
         custom_computer = self._create_custom_computer(session)
 
+        # Build agent initialization kwargs
+        agent_kwargs = {
+            "model": self.model,
+            "tools": [custom_computer],
+            "only_n_most_recent_images": 3,
+            "trajectory_dir": trajectory_dir,
+            "instructions": "Use the provided computer to complete the task as described. When the task is complete, indicate so clearly by outputting 'DONE'.",
+        }
+
+        # Add api_base if provided
+        if self.api_base:
+            agent_kwargs["api_base"] = self.api_base
+
         # Create agent with custom computer
-        agent = ComputerAgent(
-            model=self.model,
-            tools=[custom_computer],
-            only_n_most_recent_images=3,
-            trajectory_dir=trajectory_dir,
-            instructions="Use the provided computer to complete the task as described. When the task is complete, indicate so clearly by outputting 'DONE'.",
-        )
+        agent = ComputerAgent(**agent_kwargs)
         print("CUA Agent initialized with model:", self.model)
+        if self.api_base:
+            print("CUA Agent using custom api_base:", self.api_base)
 
         # Run the agent and track usage (with task-level retry on transient API errors)
         total_usage = {
