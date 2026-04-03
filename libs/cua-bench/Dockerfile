@@ -9,6 +9,7 @@ RUN apt-get update && \
     build-essential \
     python3-dev \
     portaudio19-dev \
+    libsndfile1 \
     bash \
     # Playwright system dependencies
     libnss3 \
@@ -43,7 +44,7 @@ RUN python -m pip install --upgrade pip && \
     playwright install --with-deps chromium
 
 # Install cua-agent and non torch optional deps
-RUN python -m pip install --no-cache-dir cua-agent[qwen,omni,gemini]
+RUN python -m pip install --no-cache-dir cua-agent[qwen,omni,gemini] soundfile
 
 # Create a non-root user and set ownership
 RUN useradd -m -u 1000 cuauser && \

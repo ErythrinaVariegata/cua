@@ -112,7 +112,7 @@ def main():
         parser.add_argument(
             "--platform",
             dest="platform",
-            choices=["linux-docker", "linux-qemu", "windows-qemu", "android-qemu"],
+            choices=["linux-docker", "linux-qemu", "windows-qemu", "android-qemu", "macos-lume"],
             help="Platform type (auto-detected from task if not set)",
         )
         parser.add_argument(

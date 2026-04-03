@@ -2146,6 +2146,8 @@ def _detect_env_type_and_image(env_path: Path, args) -> tuple[str, str]:
             env_type = "android-qemu"
         elif "linux-qemu" in image_name:
             env_type = "linux-qemu"
+        elif "lume" in image_name or "macos" in image_name:
+            env_type = "macos-lume"
         else:
             env_type = "linux-docker"
 
@@ -2187,6 +2189,9 @@ def _detect_env_type_and_image(env_path: Path, args) -> tuple[str, str]:
                     elif os_type and "android" in os_type.lower():
                         env_type = env_type or "android-qemu"
                         image_name = image_name or "android-qemu"
+                    elif os_type and "macos" in os_type.lower():
+                        env_type = env_type or "macos-lume"
+                        image_name = image_name or "macos-lume"
                     else:
                         env_type = env_type or "linux-docker"
                         image_name = image_name or "linux-docker"

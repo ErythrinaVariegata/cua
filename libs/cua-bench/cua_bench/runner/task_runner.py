@@ -66,6 +66,14 @@ ENV_CONFIGS = {
         "os_type": "android",
         "use_overlays": True,  # Protect golden QCOW2 disk
     },
+    "macos-lume": {
+        "image": None,
+        "internal_vnc_port": None,
+        "internal_api_port": 5000,
+        "requires_kvm": False,
+        "os_type": "macos",
+        "use_overlays": False,  # Native Lume VMs handle disk management
+    },
 }
 
 # Default agent image
@@ -292,10 +300,12 @@ class TaskRunner:
 
         try:
             # 1. Create network
-            await create_network(network_name)
+            # Note: Lume VMs don't need a Docker network since they're native VMs
+            if env_type != "macos-lume":
+                await create_network(network_name)
 
-            # 2. Start environment container (skip for simulated providers)
-            if not is_simulated:
+            # 2. Start environment container (skip for simulated providers and native Lume VMs)
+            if not is_simulated and env_type != "macos-lume":
                 await self._start_env_container(
                     task_id=task_id,
                     network_name=network_name,
@@ -308,6 +318,16 @@ class TaskRunner:
                     api_port=api_port,
                     overlay_path=overlay_path,
                 )
+            elif not is_simulated and env_type == "macos-lume":
+                # For Lume VMs, start the native VM instead of Docker container
+                lume_vm_info = await self._start_lume_vm(
+                    task_id=task_id,
+                    vm_name=golden_name,
+                    api_port=api_port,
+                    vnc_port=vnc_port,
+                )
+                # Store Lume VM info for agent connection
+                self._running_tasks[task_id]["lume_vm_info"] = lume_vm_info
 
             # 3. Start agent container (agent handles waiting for env)
             await self._start_agent_container(
@@ -678,7 +698,101 @@ class TaskRunner:
             stop_timeout=120,
         )
 
-    async def _build_agent_image(self, agent_path: Path, image_tag: str) -> bool:
+    async def _start_lume_vm(
+        self,
+        task_id: str,
+        vm_name: str,
+        api_port: Optional[int],
+        vnc_port: Optional[int],
+    ) -> dict:
+        """Start a Lume VM and wait for API availability.
+        
+        Args:
+            task_id: Task identifier
+            vm_name: Name of the Lume VM to start
+            api_port: Optional port to map VM's API port to (for debugging)
+            vnc_port: Optional port (not used for Lume, but kept for compatibility)
+        
+        Returns:
+            Dict with VM info including hostname and connection details
+        """
+        import json
+        import socket
+        
+        print(f"[Task {task_id}] Starting Lume VM: {vm_name}")
+        
+        # Check if VM exists and get its info
+        try:
+            result = await asyncio.create_subprocess_exec(
+                "lume", "list", "--json",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(result.communicate(), timeout=10)
+            
+            if result.returncode != 0:
+                raise RuntimeError(f"Failed to list Lume VMs: {stderr.decode()}")
+            
+            vms = json.loads(stdout.decode())
+            vm_info = next((vm for vm in vms if vm["name"] == vm_name), None)
+            
+            if not vm_info:
+                raise RuntimeError(f"Lume VM not found: {vm_name}")
+            
+            if vm_info.get("state") == "running":
+                print(f"[Task {task_id}] Lume VM already running: {vm_name}")
+            else:
+                print(f"[Task {task_id}] Starting Lume VM: {vm_name}")
+                result = await asyncio.create_subprocess_exec(
+                    "lume", "start", vm_name,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                try:
+                    stdout, stderr = await asyncio.wait_for(result.communicate(), timeout=300)
+                    if result.returncode != 0:
+                        raise RuntimeError(f"Failed to start Lume VM: {stderr.decode()}")
+                except asyncio.TimeoutError:
+                    raise RuntimeError(f"Lume VM startup timed out: {vm_name}")
+        
+        except RuntimeError:
+            raise
+        except Exception as e:
+            raise RuntimeError(f"Failed to manage Lume VM: {e}")
+        
+        # Wait for API port to be available
+        api_hostname = f"{vm_name}.local"  # Lume VMs are available on local network
+        api_port_internal = 5000  # Standard API port for all VMs
+        
+        print(f"[Task {task_id}] Waiting for API at {api_hostname}:{api_port_internal}")
+        max_retries = 60
+        for retry in range(max_retries):
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                socket.setdefaulttimeout(1)
+                result = sock.connect_ex((api_hostname, api_port_internal))
+                sock.close()
+                
+                if result == 0:
+                    print(f"[Task {task_id}] Lume VM API is ready at {api_hostname}:{api_port_internal}")
+                    return {
+                        "hostname": api_hostname,
+                        "api_port": api_port_internal,
+                        "vm_name": vm_name,
+                    }
+            except Exception:
+                pass
+            
+            if retry < max_retries - 1:
+                await asyncio.sleep(1)
+        
+        raise RuntimeError(
+            f"Lume VM API did not become available within "
+            f"{max_retries} seconds at {api_hostname}:{api_port_internal}"
+        )
+
+    async def _build_agent_image(
+        self, agent_path: Path, image_tag: str) -> bool:
         """Build Docker image for a local agent directory.
 
         Args:
@@ -827,13 +941,28 @@ class TaskRunner:
         if resolved_command is not None:
             agent_command = resolved_command
 
-        # Build API URL using network hostname (not used for simulated, but set for consistency)
-        api_url = (
-            f"http://{self.env_hostname}:{config.get('internal_api_port', 5000)}" if config else ""
-        )
-        vnc_url = (
-            f"http://{self.env_hostname}:{config.get('internal_vnc_port', 8006)}" if config else ""
-        )
+        # Build API URL
+        # For Lume VMs, use the VM hostname directly (not Docker network)
+        # For other types, use the Docker network hostname
+        if hasattr(self, '_running_tasks') and task_id in self._running_tasks:
+            lume_vm_info = self._running_tasks[task_id].get("lume_vm_info")
+            if lume_vm_info:
+                api_url = f"http://{lume_vm_info['hostname']}:{lume_vm_info['api_port']}"
+                vnc_url = ""  # Lume VMs don't expose VNC
+            else:
+                api_url = (
+                    f"http://{self.env_hostname}:{config.get('internal_api_port', 5000)}" if config else ""
+                )
+                vnc_url = (
+                    f"http://{self.env_hostname}:{config.get('internal_vnc_port', 8006)}" if config else ""
+                )
+        else:
+            api_url = (
+                f"http://{self.env_hostname}:{config.get('internal_api_port', 5000)}" if config else ""
+            )
+            vnc_url = (
+                f"http://{self.env_hostname}:{config.get('internal_vnc_port', 8006)}" if config else ""
+            )
 
         # Build environment variables (available to all agent images)
         env_vars = {
@@ -959,8 +1088,17 @@ class TaskRunner:
         if not task_info:
             return
 
-        # Stop and remove containers (force to ensure cleanup)
-        for container_name in [task_info["agent_container"], task_info["env_container"]]:
+        # Check if this task used a Lume VM
+        lume_vm_info = task_info.get("lume_vm_info")
+        
+        # Stop and remove containers (skip env_container for Lume VMs - they're native)
+        containers_to_cleanup = [task_info["agent_container"]]
+        if not lume_vm_info:
+            containers_to_cleanup.append(task_info["env_container"])
+        
+        for container_name in containers_to_cleanup:
+            if container_name is None:
+                continue
             try:
                 await stop_container(container_name, force=True)
             except Exception:
@@ -970,11 +1108,27 @@ class TaskRunner:
             except Exception:
                 pass  # Container may already be removed
 
-        # Remove network
-        try:
-            await remove_network(task_info["network"])
-        except Exception:
-            pass  # Network may already be removed
+        # For Lume VMs, gracefully stop the VM (don't destroy it)
+        if lume_vm_info:
+            try:
+                print(f"[Cleanup] Stopping Lume VM: {lume_vm_info['vm_name']}")
+                result = await asyncio.create_subprocess_exec(
+                    "lume", "stop", lume_vm_info["vm_name"],
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await asyncio.wait_for(result.communicate(), timeout=30)
+            except asyncio.TimeoutError:
+                print(f"[Cleanup] Lume VM stop timed out: {lume_vm_info['vm_name']}")
+            except Exception as e:
+                print(f"[Cleanup] Failed to stop Lume VM: {e}")
+
+        # Remove network (skip for Lume VMs - they don't use Docker network)
+        if not lume_vm_info:
+            try:
+                await remove_network(task_info["network"])
+            except Exception:
+                pass  # Network may already be removed
 
         # Remove task overlay directory
         if task_info.get("overlay_path"):
