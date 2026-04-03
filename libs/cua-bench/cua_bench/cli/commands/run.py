@@ -1773,6 +1773,8 @@ async def _cmd_run_dataset_async(args) -> int:
             cmd.extend(["--model", args.model])
         if getattr(args, "max_steps", None):
             cmd.extend(["--max-steps", str(args.max_steps)])
+        if getattr(args, "api_base", None):
+            cmd.extend(["--api-base", args.api_base])
         if oracle_mode:
             cmd.append("--oracle")
         if getattr(args, "platform", None):
