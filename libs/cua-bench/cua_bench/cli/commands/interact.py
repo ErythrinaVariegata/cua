@@ -110,6 +110,8 @@ def _get_env_type_from_task(env_path: Path) -> str:
         return "windows-qemu"
     elif os_type == "android":
         return "android-qemu"
+    elif os_type in ("macos", "darwin"):
+        return "macos-lume"
     else:
         # Default to linux-docker for linux and other types
         return "linux-docker"
@@ -306,8 +308,10 @@ async def _execute_native_interactive(args, env_path: Path, provider_type: str) 
         task_index = getattr(args, "variant_id", 0)
 
         # Start environment container interactively
+        golden_name = getattr(args, "image", None)
         vnc_url, api_url, cleanup, task_config, env, session = await runner.run_task_interactively(
             env_type=env_type,
+            golden_name=golden_name,
             env_path=env_path,
             task_index=task_index,
             memory=getattr(args, "memory", "8G"),

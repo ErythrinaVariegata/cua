@@ -282,6 +282,11 @@ def main():
         "--view", action="store_true", help="Open a trace viewer when done"
     )
     interact_parser.add_argument(
+        "--image",
+        dest="image",
+        help="Image or VM name to use (e.g., Lume VM name for macos-lume)",
+    )
+    interact_parser.add_argument(
         "--no-wait",
         dest="no_wait",
         action="store_true",

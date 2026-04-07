@@ -499,7 +499,8 @@ class TaskRunner:
         golden_name = golden_name or env_type
 
         # Auto-allocate ports if requested and not specified
-        if auto_allocate_ports and (vnc_port is None or api_port is None):
+        # Skip for macos-lume since we use the VM's actual ports
+        if auto_allocate_ports and env_type != "macos-lume" and (vnc_port is None or api_port is None):
             allocated_vnc, allocated_api = allocate_ports(
                 vnc_default=8006,
                 api_default=5000,
@@ -528,29 +529,41 @@ class TaskRunner:
             "overlay_path": overlay_path,
         }
 
-        # Create network
-        await create_network(network_name)
+        if env_type == "macos-lume":
+            # For Lume VMs, start the native VM instead of Docker container
+            lume_vm_info = await self._start_lume_vm(
+                task_id=task_id,
+                vm_name=golden_name,
+                api_port=api_port,
+                vnc_port=vnc_port,
+            )
+            self._running_tasks[task_id]["lume_vm_info"] = lume_vm_info
+            vnc_url = None
+            api_url = f"http://{lume_vm_info['hostname']}:{lume_vm_info['api_port']}"
+        else:
+            # Create network
+            await create_network(network_name)
 
-        # Start environment container with setup_config for display resolution
-        _setup_config = setup_config or {}
-        await self._start_env_container(
-            task_id=task_id,
-            network_name=network_name,
-            env_type=env_type,
-            golden_name=golden_name,
-            config=config,
-            memory=memory,
-            cpus=cpus,
-            vnc_port=vnc_port,
-            api_port=api_port,
-            overlay_path=overlay_path,
-            width=_setup_config.get("width"),
-            height=_setup_config.get("height"),
-        )
+            # Start environment container with setup_config for display resolution
+            _setup_config = setup_config or {}
+            await self._start_env_container(
+                task_id=task_id,
+                network_name=network_name,
+                env_type=env_type,
+                golden_name=golden_name,
+                config=config,
+                memory=memory,
+                cpus=cpus,
+                vnc_port=vnc_port,
+                api_port=api_port,
+                overlay_path=overlay_path,
+                width=_setup_config.get("width"),
+                height=_setup_config.get("height"),
+            )
 
-        # Build URLs
-        vnc_url = f"http://localhost:{vnc_port}" if vnc_port else None
-        api_url = f"http://localhost:{api_port}" if api_port else None
+            # Build URLs
+            vnc_url = f"http://localhost:{vnc_port}" if vnc_port else None
+            api_url = f"http://localhost:{api_port}" if api_port else None
 
         # Load task and run setup if env_path provided
         task_config = None

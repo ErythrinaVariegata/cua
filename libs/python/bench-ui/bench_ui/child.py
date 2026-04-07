@@ -35,12 +35,8 @@ def _start_http_server(
         if not isinstance(selector, str):
             return web.json_response({"error": "selector_required"}, status=400)
 
-        # Ensure window content is loaded
         if not ready_event.is_set():
-            # give it a short chance to finish loading
-            ready_event.wait(timeout=2.0)
-        if not ready_event.is_set():
-            return web.json_response({"error": "window_not_ready"}, status=409)
+            await asyncio.sleep(1.0)  # brief wait for initial load
 
         # Safely embed selector into JS
         selector_js = json.dumps(selector)
@@ -85,16 +81,18 @@ def _start_http_server(
         if not isinstance(code, str):
             return web.json_response({"error": "javascript_required"}, status=400)
 
-        if not ready_event.is_set():
-            ready_event.wait(timeout=2.0)
-        if not ready_event.is_set():
-            return web.json_response({"error": "window_not_ready"}, status=409)
-
-        try:
-            result = window.evaluate_js(code)
-        except Exception as e:
-            return web.json_response({"error": str(e)}, status=500)
-        return web.json_response({"result": result})
+        # Try to execute JS directly. On macOS the loaded event may not
+        # fire reliably, so we skip the ready_event gate and just attempt
+        # execution, retrying briefly on failure.
+        last_err = None
+        for _ in range(10):
+            try:
+                result = window.evaluate_js(code)
+                return web.json_response({"result": result})
+            except Exception as e:
+                last_err = e
+                await asyncio.sleep(0.3)
+        return web.json_response({"error": str(last_err)}, status=500)
 
     async def index_handler(request: web.Request):
         if html_content is None:
