@@ -231,9 +231,13 @@ class BoundApp:
 
         # If it's a callable (custom method), wrap it to pass self (BoundApp)
         if callable(attr):
+            # Get the unbound function from the class to avoid double-binding.
+            # Methods like get_incomplete_reminders(self: BoundApp) expect
+            # a BoundApp as their first argument, not the App instance.
+            unbound = getattr(type(self._app), name, attr)
 
             async def bound_method(**kwargs):
-                return await attr(self, **kwargs)
+                return await unbound(self, **kwargs)
 
             return bound_method
 
